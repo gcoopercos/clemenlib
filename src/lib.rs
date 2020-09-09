@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::fs::File;
 use std::io::Write;
+use std::path::PathBuf;
 use percent_encoding::percent_decode;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -23,6 +24,38 @@ struct PlaylistItem {
     title: String,
     artist: String,
     uri: String,
+}
+
+pub fn copy_from_local_clem(tempfile: &str) -> Result<()> {
+    let mut clemfile = PathBuf::new();
+    match dirs::home_dir() {
+        None => {},
+        Some(homedir) => {
+            clemfile.push(homedir);
+        },
+    }
+    clemfile.push(".config");
+    clemfile.push("Clementine");
+    clemfile.push("clementine.db");
+
+    fs::copy(clemfile, tempfile);
+    Ok(())
+}
+
+pub fn copy_from_remote_clem(tempfile: &str) -> Result<()> {
+    let mut clemfile = PathBuf::new();
+    match dirs::home_dir() {
+        None => {},
+        Some(homedir) => {
+            clemfile.push(homedir);
+        },
+    }
+    clemfile.push(".config");
+    clemfile.push("Clementine");
+    clemfile.push("clementine.db");
+
+    fs::copy(clemfile, tempfile);
+    Ok(())
 }
 
 
@@ -121,5 +154,10 @@ mod tests {
              "library1/aerosmith/greatest_hits/back_in_the_saddle.mp3",
             relativeuri(String::from("file:///mnt/storage1/music/library/library1/aerosmith/greatest_hits/back_in_the_saddle.mp3"))
             );
+    }
+
+    #[test]
+    fn test_copy_from_local_clem() {
+        copy_from_local_clem("/tmp/clemtest.db");
     }
 }
