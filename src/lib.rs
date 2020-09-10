@@ -16,19 +16,19 @@ use ssh2::Session;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Playlist {
-    name: String,
-    songs: Vec<PlaylistItem>
+    pub name: String,
+    pub songs: Vec<PlaylistItem>
 }
 
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct PlaylistItem {
     #[serde(skip_serializing)]
-    playlist: String,
-    service: String,
-    title: String,
-    artist: String,
-    uri: String,
+    pub playlist: String,
+    pub service: String,
+    pub title: String,
+    pub artist: String,
+    pub uri: String,
 }
 
 pub fn copy_from_local_clem(tempfile: &str) -> Result<()> {
