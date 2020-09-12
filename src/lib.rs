@@ -1,12 +1,14 @@
 use serde::{Deserialize, Serialize};
 use rusqlite::{Connection, Result, NO_PARAMS};
 use std::str;
+use std::fmt::*;
 use regex::Regex;
 use std::collections::HashMap;
 use std::fs;
 use std::fs::File;
 use std::io::prelude::*;
 use std::io::Write;
+use std::io::BufWriter;
 use std::path::PathBuf;
 use std::path::Path;
 use percent_encoding::percent_decode;
@@ -29,6 +31,7 @@ pub struct PlaylistItem {
     pub title: String,
     pub artist: String,
     pub uri: String,
+    pub length: i64,
 }
 
 pub fn copy_from_local_clem(tempfile: &str) -> Result<()> {
@@ -77,15 +80,66 @@ pub fn copy_from_remote_clem(hostportconfig: &str,
     Ok(())
 }
 
+pub fn copy_playlist_to_remote(hostportconfig: &str,
+                               username: &str,
+                               local_file: &str,
+                               remote_file: &str) -> Result<()> {
+
+    // Connect to the local SSH server
+    // let tcp = TcpStream::connect("127.0.0.1:22").unwrap();
+    let tcp = TcpStream::connect(&hostportconfig).unwrap();
+    let mut sess = Session::new().unwrap();
+    sess.set_tcp_stream(tcp);
+    sess.handshake().unwrap();
+
+    // Might want to use "userauth_pubkey_file(..)
+    sess.userauth_agent(username).unwrap();
+
+    //    let remote_file_name = format!("{}{}{}", "/home/", username, "/.config/Clementine/clementine.db");
+    let data = fs::read(local_file).expect("Unable to read file");
+
+    println!("Sending file: {}, length = {}", remote_file, data.len());
+    let mut remote_file =
+        sess.scp_send(Path::new(remote_file),
+                      0o644, data.len() as u64, None).unwrap();
+
+    remote_file.write(&data).unwrap();
+
+    Ok(())
+}
+
+pub fn export_m3u(playlist: &Playlist, prefix: &str) -> Result<()>{
+    let dfilename = String::from(&playlist.name) + ".m3u";
+    let destfile =
+        File::create(&dfilename).expect("Unable to create m3u file");
+
+    let mut destfile =
+        BufWriter::new(destfile);
+    
+    for song in &playlist.songs {
+        // let mut comment_line = String::from(format!("#EXTINF:{},{}",
+        //                                             song.length,
+        //                                             song.title));
+        println!("{}", song.uri);
+        writeln!(destfile,"#EXTINF:{},{}",song.length,song.title).unwrap();
+        let proper_loc = String::from(prefix.to_owned() + &song.uri);
+        writeln!(destfile,"{}",proper_loc).unwrap();
+        destfile.flush().unwrap();
+    }
+    
+    Ok(())
+}
+
 // Returns map of playlsit name -> playlist
-pub fn read_playlists(clemdbfile: &str) -> Option<HashMap<String, Playlist>> {
+pub fn read_playlists(library_root: &str,
+                      clemdbfile: &str) -> Option<HashMap<String, Playlist>> {
     let conn = Connection::open(clemdbfile).unwrap();
 
     // Query clementine 1.2.3 db for the ALL playlist data
     println!("Extracting clementing db data...");
     let mut stmt = conn
         .prepare("select playlists.name as playlist,  songs.title, songs.album, 
-                  songs.artist, songs.track, songs.filename
+                  songs.artist, songs.track, songs.filename, songs.length
                   from playlist_items
                   join songs on songs._rowid_ = playlist_items.library_id
                   join playlists on playlist_items.playlist = playlists._rowid_")
@@ -97,7 +151,9 @@ pub fn read_playlists(clemdbfile: &str) -> Option<HashMap<String, Playlist>> {
             playlist: row.get(0).expect("playlist retrieval problem"),
             title: row.get(1).expect("title retrieval problem"),
             artist: row.get(3).expect("artist retrieval problem"),
-            uri: relativeuri(String::from_utf8(row.get(5).unwrap()).unwrap()).to_string(), 
+            uri: relativeuri(&library_root,
+                             String::from_utf8(row.get(5).unwrap()).unwrap()).to_string(),
+            length: row.get(6).expect("length retrieval problem"),
         })).expect("query_map failed");
 
 
@@ -122,14 +178,15 @@ pub fn read_playlists(clemdbfile: &str) -> Option<HashMap<String, Playlist>> {
     Some(all_playlists)
 }
 
-pub fn extract_playlists(clemdbfile: &str) ->Result<()> {
+pub fn extract_playlists(library_root: &str,
+                         clemdbfile: &str) ->Result<()> {
     let conn = Connection::open(clemdbfile).unwrap();
 
     // Query clementine 1.2.3 db for the ALL playlist data
     println!("Extracting clementing db data...");
     let mut stmt = conn
-        .prepare("select playlists.name as playlist,  songs.title, songs.album, 
-                  songs.artist, songs.track, songs.filename
+        .prepare("select playlists.name as playlist,  songs.title, songs.album,
+                  songs.artist, songs.track, songs.filename, songs.length
                   from playlist_items
                   join songs on songs._rowid_ = playlist_items.library_id
                   join playlists on playlist_items.playlist = playlists._rowid_")?;
@@ -140,7 +197,9 @@ pub fn extract_playlists(clemdbfile: &str) ->Result<()> {
             playlist: row.get(0)?,
             title: row.get(1)?,
             artist: row.get(3)?,
-            uri: relativeuri(String::from_utf8(row.get(5).unwrap()).unwrap()).to_string(), 
+            uri: relativeuri(library_root,
+                             String::from_utf8(row.get(5).unwrap()).unwrap()).to_string(),
+            length: row.get(6)?,
         }))?;
 
 
@@ -182,21 +241,24 @@ pub fn extract_playlists(clemdbfile: &str) ->Result<()> {
 
 
 pub fn exportable_playlist(playlist: &str) -> bool {
-    if playlist.starts_with("GV") {
-        return true;
-    }
+    return true;
+    
+    // if playlist.starts_with("GV") {
+    //     return true;
+    // }
 
-    if playlist.starts_with("CV") {
-        return true;
-    }
-    return false;
+    // if playlist.starts_with("CV") {
+    //     return true;
+    // }
+    // return false;
 }
 
 // Modifies the url to be a volumio relative so volumio can find the files
-pub fn relativeuri<'a>(absuri: String) -> String { 
-    let re = Regex::new(r"(.*[library_coco|library]/library)(.*)").unwrap();
+pub fn relativeuri<'a>(library_root: &str, absuri: String) -> String { 
+    let re = Regex::new(&(r"(.*".to_string()+library_root+")(.*)")).unwrap();
+    // println!("re: {}", re);
     let uristr = percent_decode(absuri.as_bytes()).decode_utf8().unwrap();
-    let result = re.replace(&uristr,"library${2}");
+    let result = re.replace(&uristr,"${2}");
 
     let mut fixed_str = String::new();
     fixed_str.push_str(&*result);
@@ -223,7 +285,6 @@ mod tests {
     // fn test_copy_from_local_clem() {
     //     copy_from_local_clem("/tmp/clemtest.db");
     // }
-    
     // #[test]
     // fn test_copy_from_remote_clem() {
     //     // copy_from_remote_clem("saturn.local:22",
@@ -241,6 +302,9 @@ mod tests {
                 for (name, plist) in playlists {
                     println!("Playlist: {}", name);
 //                    println!("{}", serde_json::to_string_pretty(&plist.songs).unwrap());
+                    if name == "GV-JimCathy" {
+                        export_m3u(&plist, "/home/music/library_coco/");
+                    }
                 }
             },
         }
