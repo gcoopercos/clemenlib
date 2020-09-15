@@ -103,7 +103,7 @@ pub fn copy_playlist_to_remote(hostportconfig: &str,
         sess.scp_send(Path::new(remote_file),
                       0o644, data.len() as u64, None).unwrap();
 
-    remote_file.write(&data).unwrap();
+    remote_file.write_all(&data).unwrap();
 
     Ok(())
 }
@@ -122,7 +122,7 @@ pub fn export_m3u(playlist: &Playlist, prefix: &str) -> Result<()>{
         //                                             song.title));
         println!("{}", song.uri);
         writeln!(destfile,"#EXTINF:{},{}",song.length,song.title).unwrap();
-        let proper_loc = String::from(prefix.to_owned() + &song.uri);
+        let proper_loc = prefix.to_owned() + &song.uri;
         writeln!(destfile,"{}",proper_loc).unwrap();
         destfile.flush().unwrap();
     }
@@ -152,7 +152,7 @@ pub fn read_playlists(library_root: &str,
             title: row.get(1).expect("title retrieval problem"),
             artist: row.get(3).expect("artist retrieval problem"),
             uri: relativeuri(&library_root,
-                             String::from_utf8(row.get(5).unwrap()).unwrap()).to_string(),
+                             String::from_utf8(row.get(5).unwrap()).unwrap()),
             length: row.get(6).expect("length retrieval problem"),
         })).expect("query_map failed");
 
@@ -164,15 +164,10 @@ pub fn read_playlists(library_root: &str,
     for song in song_iter {
         let songval = song.unwrap();
         let playlist_name: String = String::from(&songval.playlist);
-
-        if exportable_playlist(&playlist_name) { 
-//            songval.uri.insert_str(0,"music-library/USB/mediadrive/");
- 
-            let playlist_entry = all_playlists.entry(String::from(&playlist_name)).or_insert(
-                Playlist {name: String::from(&playlist_name),
-                          songs: Vec::new()});
-            playlist_entry.songs.push(songval);
-        }
+        let playlist_entry = all_playlists.entry(String::from(&playlist_name)).or_insert(
+            Playlist {name: String::from(&playlist_name),
+                      songs: Vec::new()});
+        playlist_entry.songs.push(songval);
     }
 
     Some(all_playlists)
@@ -198,7 +193,7 @@ pub fn extract_playlists(library_root: &str,
             title: row.get(1)?,
             artist: row.get(3)?,
             uri: relativeuri(library_root,
-                             String::from_utf8(row.get(5).unwrap()).unwrap()).to_string(),
+                             String::from_utf8(row.get(5).unwrap()).unwrap()),
             length: row.get(6)?,
         }))?;
 
@@ -213,8 +208,8 @@ pub fn extract_playlists(library_root: &str,
         let playlist_name: String = String::from(&songval.playlist);
 
         if exportable_playlist(&playlist_name) { 
-            musiclist_file.write(&songval.uri.as_bytes()).unwrap();
-            musiclist_file.write(b"\n").unwrap();
+            musiclist_file.write_all(&songval.uri.as_bytes()).unwrap();
+            musiclist_file.write_all(b"\n").unwrap();
 
             songval.uri.insert_str(0,"music-library/USB/mediadrive/");
  
@@ -241,20 +236,18 @@ pub fn extract_playlists(library_root: &str,
 
 
 pub fn exportable_playlist(playlist: &str) -> bool {
-    return true;
-    
-    // if playlist.starts_with("GV") {
-    //     return true;
-    // }
+    if playlist.starts_with("GV") {
+        return true;
+    }
 
-    // if playlist.starts_with("CV") {
-    //     return true;
-    // }
-    // return false;
+    if playlist.starts_with("CV") {
+        return true;
+    }
+    false
 }
 
 // Modifies the url to be a volumio relative so volumio can find the files
-pub fn relativeuri<'a>(library_root: &str, absuri: String) -> String { 
+pub fn relativeuri(library_root: &str, absuri: String) -> String { 
     let re = Regex::new(&(r"(.*".to_string()+library_root+")(.*)")).unwrap();
     // println!("re: {}", re);
     let uristr = percent_decode(absuri.as_bytes()).decode_utf8().unwrap();
@@ -262,7 +255,7 @@ pub fn relativeuri<'a>(library_root: &str, absuri: String) -> String {
 
     let mut fixed_str = String::new();
     fixed_str.push_str(&*result);
-    return fixed_str;
+    fixed_str
 }
 
 #[cfg(test)]
