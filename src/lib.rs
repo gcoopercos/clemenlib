@@ -130,13 +130,72 @@ pub fn export_m3u(playlist: &Playlist, prefix: &str) -> Result<()>{
     Ok(())
 }
 
-// Returns map of playlsit name -> playlist
-pub fn read_playlists(library_root: &str,
-                      clemdbfile: &str) -> Option<HashMap<String, Playlist>> {
+pub fn export_volumio(playlist: &Playlist) -> Result<()>{
+    let dfilename = String::from(&playlist.name) + ".vl";
+
+    let plist_json = serde_json::to_string_pretty(&playlist.songs).unwrap();
+    fs::write(&dfilename, plist_json).expect("Unable to write volumio file");
+    println!("Playlist written: {}", dfilename);
+    Ok(())
+}
+
+pub fn read_raw_playlist(clemdbfile: &str,
+                         playlist_name: &str) -> Option<Playlist> {
+
     let conn = Connection::open(clemdbfile).unwrap();
 
     // Query clementine 1.2.3 db for the ALL playlist data
-    println!("Extracting clementing db data...");
+    let mut stmt = conn
+        .prepare("
+select playlists.name as playlist, 
+    items.title, items.artist, items.filename, items.length
+from playlists
+join playlist_items items on items.playlist = playlists._rowid_
+where playlists.name = ?").unwrap();
+
+
+    let song_iter = stmt
+        .query_map(&[&playlist_name], |row| Ok(PlaylistItem {
+            service: "mpd".to_owned(),
+            playlist: row.get(0).expect("playlist retrieval problem"),
+            title: row.get(1).expect("title retrieval problem"),
+            artist: row.get(2).expect("artist retrieval problem"),
+            // uri: relativeuri(&library_root,
+            //                  String::from_utf8(row.get(5).unwrap()).unwrap()),
+            uri: String::from_utf8(row.get(3).unwrap()).unwrap(),
+            length: row.get(4).expect("length retrieval problem"),
+        })).expect("query_map failed");
+
+
+    println!("Creating playlist data structures from clementine database...");
+
+    // Go through results making a data structure we can work with
+    let mut playlist = Playlist{name: String::from(playlist_name),
+                                songs: Vec::new()};
+    
+    for song in song_iter {
+        let songval = song.unwrap();
+        // let playlist_name: String = String::from(&songval.playlist);
+        // let playlist_entry = all_playlists.entry(String::from(&playlist_name)).or_insert(
+        //     Playlist {name: String::from(&playlist_name),
+        //               songs: Vec::new()});
+        // if let Some(pfx) = &playlist_entry_prefix {
+        //     songval.uri.insert_str(0,pfx);
+        // }
+        playlist.songs.push(songval);
+    }
+
+    Some(playlist)
+    
+}
+
+// Returns map of playlsit name -> playlist
+pub fn read_playlists(library_root: &str,
+                      clemdbfile: &str,
+                      playlist_entry_prefix: Option<&str>) -> Option<HashMap<String, Playlist>> {
+    let conn = Connection::open(clemdbfile).unwrap();
+
+    // Query clementine 1.2.3 db for the ALL playlist data
     let mut stmt = conn
         .prepare("select playlists.name as playlist,  songs.title, songs.album, 
                   songs.artist, songs.track, songs.filename, songs.length
@@ -157,93 +216,23 @@ pub fn read_playlists(library_root: &str,
         })).expect("query_map failed");
 
 
-    println!("Creating playlist data structures...");
+    println!("Creating playlist data structures from clementine database...");
     let mut all_playlists: HashMap<String,Playlist> =  HashMap::new();
 
-    // Go through results making a data structure we can work with
-    for song in song_iter {
-        let songval = song.unwrap();
-        let playlist_name: String = String::from(&songval.playlist);
-        let playlist_entry = all_playlists.entry(String::from(&playlist_name)).or_insert(
-            Playlist {name: String::from(&playlist_name),
-                      songs: Vec::new()});
-        playlist_entry.songs.push(songval);
-    }
-
-    Some(all_playlists)
-}
-
-pub fn extract_playlists(library_root: &str,
-                         clemdbfile: &str) ->Result<()> {
-    let conn = Connection::open(clemdbfile).unwrap();
-
-    // Query clementine 1.2.3 db for the ALL playlist data
-    println!("Extracting clementing db data...");
-    let mut stmt = conn
-        .prepare("select playlists.name as playlist,  songs.title, songs.album,
-                  songs.artist, songs.track, songs.filename, songs.length
-                  from playlist_items
-                  join songs on songs._rowid_ = playlist_items.library_id
-                  join playlists on playlist_items.playlist = playlists._rowid_")?;
-
-    let song_iter = stmt
-        .query_map(NO_PARAMS, |row| Ok(PlaylistItem {
-            service: "mpd".to_owned(),
-            playlist: row.get(0)?,
-            title: row.get(1)?,
-            artist: row.get(3)?,
-            uri: relativeuri(library_root,
-                             String::from_utf8(row.get(5).unwrap()).unwrap()),
-            length: row.get(6)?,
-        }))?;
-
-
-    println!("Creating playlist data structures...");
-    let mut all_playlists: HashMap<String,Playlist> =  HashMap::new();
-
-    let mut musiclist_file = File::create("musiclist.txt").unwrap();
     // Go through results making a data structure we can work with
     for song in song_iter {
         let mut songval = song.unwrap();
         let playlist_name: String = String::from(&songval.playlist);
-
-        if exportable_playlist(&playlist_name) { 
-            musiclist_file.write_all(&songval.uri.as_bytes()).unwrap();
-            musiclist_file.write_all(b"\n").unwrap();
-
-            songval.uri.insert_str(0,"music-library/USB/mediadrive/");
- 
-            let playlist_entry = all_playlists.entry(String::from(&playlist_name)).or_insert(
-                Playlist {name: String::from(&playlist_name),
-                          songs: Vec::new()});
-            playlist_entry.songs.push(songval);
+        let playlist_entry = all_playlists.entry(String::from(&playlist_name)).or_insert(
+            Playlist {name: String::from(&playlist_name),
+                      songs: Vec::new()});
+        if let Some(pfx) = &playlist_entry_prefix {
+            songval.uri.insert_str(0,pfx);
         }
-    }
-    musiclist_file.flush().unwrap();
-    println!("Creating playlist files...");
-    for (name, plist) in all_playlists {
-       if exportable_playlist(&name) {
-       // For each playlist create a file and output in a volumio readable format
-           let pl_filename = String::from(&name) + ".vl";
-           let plist_json = serde_json::to_string_pretty(&plist.songs).unwrap();
-           fs::write(pl_filename, plist_json).expect("Unable to write playlist file");
-       }
+        playlist_entry.songs.push(songval);
     }
 
-    println!("Complete. Your playlists are *.vl");
-    Ok(())
-}
-
-
-pub fn exportable_playlist(playlist: &str) -> bool {
-    if playlist.starts_with("GV") {
-        return true;
-    }
-
-    if playlist.starts_with("CV") {
-        return true;
-    }
-    false
+    Some(all_playlists)
 }
 
 // Modifies the url to be a volumio relative so volumio can find the files
